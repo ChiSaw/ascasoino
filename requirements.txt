@@ -1,0 +1,19 @@
+#sudo apt-get install python3-pil
+#sudo apt-get install python3-numpy
+#sudo apt install bluez
+#sudo usermod -G bluetooth -a christian
+
+Adafruit-Blinka==8.22.0
+adafruit-circuitpython-busdevice==5.2.6
+adafruit-circuitpython-requests==2.0.1
+adafruit-circuitpython-typing==1.9.4
+Adafruit-PlatformDetect==3.52.0
+Adafruit-PureIO==1.1.11
+circuitpython-cst816==0.1.0
+smbus==1.1.post2
+pillow>=8.0.0
+RPi.GPIO>=0.7.0
+pyyaml>=5.4.0
+spidev
+pybluez
+bluepy
