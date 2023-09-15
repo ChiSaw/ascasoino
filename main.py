@@ -6,13 +6,13 @@ import sys
 import time
 import logging
 import math
-from threading import Timer, Thread
+from threading import Timer
 from PIL import Image, ImageDraw, ImageFont
 import RPi.GPIO as gpio
-from lib import LCD_1inch28, Touch_1inch28, EspressoShotSimulator
+from lib import LCD_1inch28, Touch_1inch28
 import yaml
 
-import pexpect, subprocess, signal
+import pexpect, subprocess
 
 
 # Constants
@@ -23,16 +23,6 @@ COLORS = {
     "primary_light": "#3CA6A6",
     "secondary": "#F2E3D5",
     "error": "#D95252",
-}
-
-GESTURES = {
-    "swipe_up": 0x01,
-    "swipe_down": 0x02,
-    "swipe_left": 0x03,
-    "swipe_right": 0x04,
-    "single_click": 0x05,
-    "double_click": 0x0B,
-    "long_press": 0x0C,
 }
 
 FELICITA = {
@@ -49,6 +39,10 @@ SHOT_AFTER_DRIPPING_WEIGHT_G = 2
 SHOT_BUTTON_ASCASO_INT = 21
 TP_INT = 5
 
+# Change to your own BLE scale MAC address
+# use 'sudo hcitool lescan'
+BLE_MAC_ADDRESS = "64:33:DB:AD:C5:FD"
+
 # Setup Logging
 logging.basicConfig(level=logging.DEBUG)
 pil_logger = logging.getLogger("PIL")
@@ -64,7 +58,6 @@ shot_current_weight_g = 0
 shot_target_weight_g = 35
 scale_connected = False
 gattinst = None
-ble_result_container = [None]
 ble_scale = "FELICITA"
 shot_running = False
 mode = 1
@@ -97,31 +90,6 @@ def restart_ble_interface():
         print(f"Failed to restart BLE interface: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-
-
-def get_mac_address():
-    global ble_result_container, ble_scale
-
-    command = ["hcitool lescan"]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, universal_newlines=True, encoding="utf-8", errors="replace")
-
-    while True:
-        output_line = process.stdout.readline()
-        if output_line:
-            print(output_line.strip(), flush=True)  # For debugging
-            if ble_scale in output_line:
-                mac_address = output_line.split(" ")[0]
-                ble_result_container[0] = mac_address
-                process.terminate()
-                return
-            if "error" in output_line:
-                restart_ble_interface()
-            elif process.poll() is not None:
-                print("end", flush=True)  # For debugging
-                break
-
-    if process.poll() is None:
-        process.terminate()
 
 
 def connect_and_parse_data(mac_address):
@@ -357,7 +325,7 @@ def setup_fonts():
 
 def main():
     """Main function to execute the script."""
-    global now, shot_time_s, shot_current_weight_g, shot_target_weight_g, shot_running, disp, scale_connected, gattinst, ble_result_container
+    global now, shot_time_s, shot_current_weight_g, shot_target_weight_g, shot_running, disp, scale_connected, gattinst
 
     # Initialize YAML and set shot_target_weight_g
     initialize_yaml()
@@ -392,19 +360,12 @@ def main():
     shot_image = Image.new("RGB", (disp.width, disp.height), COLORS["primary_dark"])
     shot_draw = ImageDraw.Draw(shot_image)
 
-    # get_mac_address()
-
-    ble_mac_address = "64:33:DB:AD:C5:FD"
-
     ble_timeout_count = 0
 
     while True:
         now = time.time()
-        if ble_result_container[0] != None:
-            ble_mac_address = ble_result_container[0]
-            print(f"BLE address {ble_mac_address}")
-        if scale_connected == False and ble_mac_address != "":
-            connect_and_parse_data(ble_mac_address)
+        if scale_connected == False and BLE_MAC_ADDRESS != "":
+            connect_and_parse_data(BLE_MAC_ADDRESS)
             scale_connected = True
             ble_timeout_count = 0
         if scale_connected:
@@ -421,6 +382,7 @@ def main():
                     continue
 
                 input_string = line.decode("utf-8")
+
                 if "connect" in input_string:
                     continue
 
@@ -459,7 +421,7 @@ def main():
 
         if shot_running:
             shot_time_s = now - shot_started_time
-            print(f"running: {shot_current_weight_g}/{shot_target_weight_g}g | {shot_time_s}s | ")
+            print(f"Running: {shot_current_weight_g}/{shot_target_weight_g}g | {shot_time_s}s | ")
             if (shot_current_weight_g + SHOT_AFTER_DRIPPING_WEIGHT_G) >= shot_target_weight_g:
                 manage_shot(False)
 
