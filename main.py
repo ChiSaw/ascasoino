@@ -6,13 +6,13 @@ import sys
 import time
 import logging
 import math
-from threading import Timer
+from threading import Timer, Thread
 from PIL import Image, ImageDraw, ImageFont
 import RPi.GPIO as gpio
 from lib import LCD_1inch28, Touch_1inch28, EspressoShotSimulator
 import yaml
-from bluepy.btle import Scanner, DefaultDelegate, Peripheral
-import binascii
+
+import pexpect, subprocess, signal
 
 
 # Constants
@@ -24,6 +24,7 @@ COLORS = {
     "secondary": "#F2E3D5",
     "error": "#D95252",
 }
+
 GESTURES = {
     "swipe_up": 0x01,
     "swipe_down": 0x02,
@@ -33,13 +34,25 @@ GESTURES = {
     "double_click": 0x0B,
     "long_press": 0x0C,
 }
-SHOT_RELAY = 14
+
+FELICITA = {
+    "command_handle": "0x25",
+    "start_timer": "52",
+    "stop_timer": "53",
+    "reset_timer": "43",
+    "toggle_timer": "44",
+    "tare": "54",
+}
+
+SHOT_RELAY_PIN = 14
 SHOT_AFTER_DRIPPING_WEIGHT_G = 2
 SHOT_BUTTON_ASCASO_INT = 21
 TP_INT = 5
 
 # Setup Logging
 logging.basicConfig(level=logging.DEBUG)
+pil_logger = logging.getLogger("PIL")
+pil_logger.setLevel(logging.INFO)
 
 # Global Variables
 touch_interrupt_flag = 0
@@ -50,6 +63,9 @@ shot_time_s = 0.0
 shot_current_weight_g = 0
 shot_target_weight_g = 35
 scale_connected = False
+gattinst = None
+ble_result_container = [None]
+ble_scale = "FELICITA"
 shot_running = False
 mode = 1
 disp = {}
@@ -57,20 +73,62 @@ shot_button_debounce_ms = 300  # debounce time in milliseconds
 shot_button_last_interrupt_time = 0
 
 # Initialize Objects
-scale = EspressoShotSimulator.EspressoShotSimulator(shot_target_weight_g)
 touch = Touch_1inch28.Touch_1inch28()
 
 # Path
 path = os.path.dirname(os.path.realpath(__file__))
 
 
-class ScanDelegate(DefaultDelegate):
-    def __init__(self):
-        DefaultDelegate.__init__(self)
+def send_ble_command(mac_address, handle, command):
+    try:
+        subprocess.run(["gatttool", "-b", f"{mac_address}", "--char-write-req", "-a", f"{handle}", "-n", f"{command}"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to send BLE command: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
-    def handleDiscovery(self, dev, isNewDev, isNewData):
-        if isNewDev:
-            print(f"Discovered device {dev.addr}")
+
+def restart_ble_interface():
+    try:
+        subprocess.run(["sudo", "hciconfig", "hci0", "down"], check=True)
+        subprocess.run(["sudo", "hciconfig", "hci0", "up"], check=True)
+        print("BLE interface restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to restart BLE interface: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+
+def get_mac_address():
+    global ble_result_container, ble_scale
+
+    command = ["hcitool lescan"]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, universal_newlines=True, encoding="utf-8", errors="replace")
+
+    while True:
+        output_line = process.stdout.readline()
+        if output_line:
+            print(output_line.strip(), flush=True)  # For debugging
+            if ble_scale in output_line:
+                mac_address = output_line.split(" ")[0]
+                ble_result_container[0] = mac_address
+                process.terminate()
+                return
+            if "error" in output_line:
+                restart_ble_interface()
+            elif process.poll() is not None:
+                print("end", flush=True)  # For debugging
+                break
+
+    if process.poll() is None:
+        process.terminate()
+
+
+def connect_and_parse_data(mac_address):
+    global scale_connected, gattinst
+    gattinst = pexpect.spawn(f"gatttool -b {mac_address} -I")
+    gattinst.sendline("connect")
+    return gattinst
 
 
 def initialize_yaml():
@@ -135,19 +193,33 @@ def handled_shot_button_interrupt():
 
 def manage_shot(on):
     """Manage the espresso shot."""
-    global shot_running, shot_started_time, now
-    gpio.output(SHOT_RELAY, True)
-    time.sleep(0.1)
-    gpio.output(SHOT_RELAY, False)
+    global shot_current_weight_g, shot_running, shot_started_time, now, scale_connected, gattinst
+
+    print(f"Turn shot to {on} with current weight of {shot_current_weight_g}")
+    # We need to tare first
+    if on and shot_current_weight_g > 1.0:
+        gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['tare']}")
+        print(f"Taring scale...")
+        Timer(2, manage_shot, [True]).start()
+        return
 
     if on:
         shot_started_time = now
-        scale.start_shot()
         shot_running = True
+        if scale_connected:
+            gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['reset_timer']}")
+            time.sleep(0.2)
+            gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['start_timer']}")
+            time.sleep(0.2)
     else:
         Timer(30, reset_shot).start()
-        Timer(3, scale.stop_shot).start()
         shot_running = False
+        if scale_connected:
+            gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['stop_timer']}")
+
+    gpio.output(SHOT_RELAY_PIN, True)
+    time.sleep(0.1)
+    gpio.output(SHOT_RELAY_PIN, False)
 
 
 def draw_bluetooth_connection(draw):
@@ -285,7 +357,7 @@ def setup_fonts():
 
 def main():
     """Main function to execute the script."""
-    global now, shot_time_s, shot_current_weight_g, shot_target_weight_g, shot_running, disp, scale_connected
+    global now, shot_time_s, shot_current_weight_g, shot_target_weight_g, shot_running, disp, scale_connected, gattinst, ble_result_container
 
     # Initialize YAML and set shot_target_weight_g
     initialize_yaml()
@@ -295,8 +367,8 @@ def main():
 
     touch.init()
     touch.int_irq(TP_INT, touch_interrupt_callback)
-    gpio.setup(SHOT_RELAY, gpio.OUT)
-    gpio.output(SHOT_RELAY, 0)
+    gpio.setup(SHOT_RELAY_PIN, gpio.OUT)
+    gpio.output(SHOT_RELAY_PIN, 0)
 
     # Set up the button pin as an input with an internal pull-up resistor
     gpio.setup(SHOT_BUTTON_ASCASO_INT, gpio.IN, pull_up_down=gpio.PUD_UP)
@@ -320,51 +392,66 @@ def main():
     shot_image = Image.new("RGB", (disp.width, disp.height), COLORS["primary_dark"])
     shot_draw = ImageDraw.Draw(shot_image)
 
-    # https://forums.raspberrypi.com/viewtopic.php?t=329762
-    scanner = Scanner().withDelegate(ScanDelegate())
-    devices = None  # scanner.scan(10.0)  # 10.0 seconds scan time
+    # get_mac_address()
 
-    felicita_device = None
-    if devices:
-        for dev in devices:
-            if dev.getValueText(9) == "FELICITA":
-                felicita_device = dev
-                break
+    ble_mac_address = "64:33:DB:AD:C5:FD"
 
-    if felicita_device:
-        print(f"Found the Felicita scale with address {felicita_device.addr}")
-        peripheral = Peripheral(felicita_device)
-        peripheral.setDelegate(ScanDelegate())
-
-        # Connecting to the correct service (replace with correct UUID)
-        service = peripheral.getServiceByUUID("FFE0")
-
-        # Connecting to the correct characteristic (replace with correct UUID)
-        char = service.getCharacteristics("FEE0")[0]
-        scale_connected = True
-    else:
-        peripheral = None
+    ble_timeout_count = 0
 
     while True:
         now = time.time()
+        if ble_result_container[0] != None:
+            ble_mac_address = ble_result_container[0]
+            print(f"BLE address {ble_mac_address}")
+        if scale_connected == False and ble_mac_address != "":
+            connect_and_parse_data(ble_mac_address)
+            scale_connected = True
+            ble_timeout_count = 0
+        if scale_connected:
+            try:
+                gattinst.read_nonblocking(size=40000, timeout=0.1)
+                index = gattinst.expect(["Notification handle = 0x0025 value: ", pexpect.TIMEOUT, pexpect.EOF], timeout=0.2)
+                if index == 0:
+                    line = gattinst.before
+                elif index == 1:
+                    # In case of timeout, flush the buffer to force reading newer data
+                    gattinst.read_nonblocking(size=40000, timeout=0.1)
+                    continue
+                else:
+                    continue
 
-        if peripheral and peripheral.waitForNotifications(0.02):
-            # Received data
-            data = char.read()
-            data_array = [int(b) for b in data]
+                input_string = line.decode("utf-8")
+                if "connect" in input_string:
+                    continue
 
-            # Parsing the data
-            weight_digits = data_array[3:9]
-            weight = "".join(str(x - 48) for x in weight_digits)
-            scale_units = "".join(chr(x) for x in data_array[9:11])
-            battery = data_array[15] - 129
+                position = input_string.find("\r")
+                hex_numbers_string = input_string[:position].strip()
+                hex_numbers_array = hex_numbers_string.split(" ")
+                data = [int(hex_number, 16) for hex_number in hex_numbers_array if hex_number]
+                # Example data from Felicita Arc
+                # data_array [1, 2, 43, 48, 48, 49, 49, 50, 48, 32, 103, 67, 249, 64, 34, 136, 13, 10] = 11.2g
 
-            shot_current_weight_g = float(weight)
+                if len(data) < 16:
+                    continue
 
-            print(f"Weight: {weight} {scale_units}")
-            print(f"Battery Level: {battery}%")
-        else:
-            shot_current_weight_g = scale.get_current_weight()
+                # Parsing the Felicita Arc data
+                weight_digits = data[3:7]
+                weight_deminals = data[7:9]
+                weight = "".join(str(x - 48) for x in weight_digits) + "." + "".join(str(x - 48) for x in weight_deminals)
+                weight = weight.lstrip("0")
+                scale_units = "".join(chr(x) for x in data[9:11])
+                battery = ((data[15] - 129) / 29) * 100
+
+                shot_current_weight_g = float(weight)
+
+                print(f"Weight: {weight} {scale_units} | Battery Level: {battery:.1f}%")
+
+            except pexpect.TIMEOUT:
+                ble_timeout_count += 1
+                if ble_timeout_count > 10:
+                    print("BLE scale disconnected.")
+                    gattinst.close()
+                    scale_connected = False
 
         # Prepare screen
         shot_draw.rectangle((0, 0, 240, 240), fill=COLORS["primary_dark"], outline=None, width=1)
@@ -372,6 +459,7 @@ def main():
 
         if shot_running:
             shot_time_s = now - shot_started_time
+            print(f"running: {shot_current_weight_g}/{shot_target_weight_g}g | {shot_time_s}s | ")
             if (shot_current_weight_g + SHOT_AFTER_DRIPPING_WEIGHT_G) >= shot_target_weight_g:
                 manage_shot(False)
 
@@ -389,16 +477,15 @@ def main():
 
             # start/stop shot
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 0, 180, 120):
-                shot_running = not shot_running
-                manage_shot(shot_running)
+                print("Shot button pressed")
+                manage_shot(not shot_running)
                 display_image(shot_image, "./assets/bottom_pressed.png", (0, 0), (240, 240))
 
             handled_touch_interrupt()
 
         # Evaluate shot button
         if shot_button_interrupt_flag == 1:
-            shot_running = not shot_running
-            manage_shot(shot_running)
+            manage_shot(not shot_running)
 
         # Draw the main screen
         shot_draw.text((30, 95), f"{shot_current_weight_g:.1f}g", fill=COLORS["secondary"], font=fonts["m"])

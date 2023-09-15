@@ -17,3 +17,4 @@ pyyaml>=5.4.0
 spidev
 pybluez
 bluepy
+pexpect
