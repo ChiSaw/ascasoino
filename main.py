@@ -375,16 +375,31 @@ def main():
 
     ble_timeout_count = 0
     last_bluetooth_connect_time_s = 0
-    clear = True
+    clear_all = True
+    clear_upper_right = False
+    clear_upper_left = False
+    clear_lower_half = False
 
     # profiler.enable()
     while True:
         now = time.time()
 
         draw_all = False
-        if clear:
+        if clear_all:
             draw_all = True
-            clear = False
+            clear_all = False
+        draw_upper_left = False
+        draw_upper_right = False
+        draw_lower_half = False
+        if clear_upper_left:
+            draw_upper_left = True
+            clear_upper_left = False
+        if clear_upper_right:
+            draw_upper_right = True
+            clear_upper_right = False
+        if clear_lower_half:
+            draw_lower_half = True
+            clear_lower_half = False
         draw_seconds = False
         draw_current_weight = False
         draw_target_weight = False
@@ -462,23 +477,25 @@ def main():
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 180, 270, 120):
                 update_shot_target_weight_g(shot_target_weight_g - 0.5)
                 display_image(shot_image, "./assets/left_pressed.png", (0, 0), (240, 240))
-                draw_all = True
-                clear = True
+                draw_upper_left = True
+                draw_target_weight = True
+                clear_upper_left = True
 
             # increase weight
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 270, 359, 120):
                 update_shot_target_weight_g(shot_target_weight_g + 0.5)
                 display_image(shot_image, "./assets/right_pressed.png", (0, 0), (240, 240))
-                draw_all = True
-                clear = True
+                draw_upper_right = True
+                draw_target_weight = True
+                clear_upper_right = True
 
             # start/stop shot
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 0, 180, 120):
                 print("Shot button pressed")
                 display_image(shot_image, "./assets/bottom_pressed.png", (0, 0), (240, 240))
                 manage_shot(not shot_running)
-                draw_all = True
-                clear = True
+                draw_lower_half = True
+                clear_lower_half = True
 
             handled_touch_interrupt()
 
@@ -496,10 +513,18 @@ def main():
         if draw_all:
             disp.ShowImage(shot_image)
         else:
+            if draw_upper_left:
+                disp.ShowImage_Windows(1, 1, 120, 120, shot_image)
+            if draw_upper_right:
+                disp.ShowImage_Windows(120, 1, 239, 120, shot_image)
+            if draw_lower_half:
+                disp.ShowImage_Windows(1, 140, 238, 238, shot_image)
             if draw_seconds:
                 disp.ShowImage_Windows(30, 150, 200, 200, shot_image)
             if draw_current_weight:
                 disp.ShowImage_Windows(30, 95, 60, 120, shot_image)
+            if draw_target_weight:
+                disp.ShowImage_Windows(120, 1, 239, 150, shot_image)
             if draw_bluetooth:
                 disp.ShowImage_Windows(118, 20, 122, 24, shot_image)
         # time.sleep(0.01)

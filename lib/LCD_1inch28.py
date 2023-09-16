@@ -338,10 +338,10 @@ class LCD_1inch28(config.RaspberryPi):
         Xstart, Xend = sorted([Xstart, Xend])
         Ystart, Yend = sorted([Ystart, Yend])
 
-        Xstart = max(Xstart, 10) - 10
-        Ystart = max(Ystart, 10) - 10
-        Xend += 10
-        Yend += 10
+        Xstart = max(Xstart, 10)  # - 10
+        Ystart = max(Ystart, 10)  # - 10
+        # Xend += 10
+        # Yend += 10
 
         self.SetWindows(Xstart, Ystart, Xend, Yend)
         self.digital_write(self.DC_PIN, self.GPIO.HIGH)
