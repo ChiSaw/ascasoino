@@ -14,6 +14,8 @@ import yaml
 
 import pexpect, subprocess
 
+import cProfile
+import pstats
 
 # Constants
 COLORS = {
@@ -35,9 +37,10 @@ FELICITA = {
 }
 
 SHOT_RELAY_PIN = 14
+SHOT_BUTTON_ASCASO_INT_PIN = 21
+TP_INT_PIN = 5
+BLUETOOTH_CONNECT_S = 1.0
 SHOT_AFTER_DRIPPING_WEIGHT_G = 2
-SHOT_BUTTON_ASCASO_INT = 21
-TP_INT = 5
 
 # Change to your own BLE scale MAC address
 # use 'sudo hcitool lescan'
@@ -68,6 +71,8 @@ shot_button_last_interrupt_time = 0
 # Initialize Objects
 touch = Touch_1inch28.Touch_1inch28()
 
+profiler = cProfile.Profile()
+
 # Path
 path = os.path.dirname(os.path.realpath(__file__))
 
@@ -96,7 +101,15 @@ def connect_and_parse_data(mac_address):
     global scale_connected, gattinst
     gattinst = pexpect.spawn(f"gatttool -b {mac_address} -I")
     gattinst.sendline("connect")
-    return gattinst
+    try:
+        index = gattinst.expect(["Connection successful", pexpect.TIMEOUT, pexpect.EOF], timeout=0.1)
+        return gattinst, True
+    except pexpect.TIMEOUT:
+        gattinst.close()
+        return gattinst, False
+    except pexpect.EOF:
+        gattinst.close()
+        return gattinst, False
 
 
 def initialize_yaml():
@@ -136,7 +149,7 @@ def shot_button_callback(pin):
         shot_button_interrupt_flag = 1
 
 
-def touch_interrupt_callback(TP_INT):
+def touch_interrupt_callback(TP_INT_PIN):
     """Handle the interrupt callback."""
     global touch_interrupt_flag
     if mode == 1:
@@ -176,9 +189,9 @@ def manage_shot(on):
         shot_running = True
         if scale_connected:
             gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['reset_timer']}")
-            time.sleep(0.2)
+            time.sleep(0.1)
             gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['start_timer']}")
-            time.sleep(0.2)
+            time.sleep(0.1)
     else:
         Timer(30, reset_shot).start()
         shot_running = False
@@ -334,15 +347,15 @@ def main():
     disp = initialize_display()
 
     touch.init()
-    touch.int_irq(TP_INT, touch_interrupt_callback)
+    touch.int_irq(TP_INT_PIN, touch_interrupt_callback)
     gpio.setup(SHOT_RELAY_PIN, gpio.OUT)
     gpio.output(SHOT_RELAY_PIN, 0)
 
     # Set up the button pin as an input with an internal pull-up resistor
-    gpio.setup(SHOT_BUTTON_ASCASO_INT, gpio.IN, pull_up_down=gpio.PUD_UP)
+    gpio.setup(SHOT_BUTTON_ASCASO_INT_PIN, gpio.IN, pull_up_down=gpio.PUD_UP)
 
     # Add an interrupt on the falling edge (from HIGH to LOW) of the button pin
-    gpio.add_event_detect(SHOT_BUTTON_ASCASO_INT, gpio.FALLING, callback=shot_button_callback, bouncetime=shot_button_debounce_ms)
+    gpio.add_event_detect(SHOT_BUTTON_ASCASO_INT_PIN, gpio.FALLING, callback=shot_button_callback, bouncetime=shot_button_debounce_ms)
 
     fonts = setup_fonts()
 
@@ -361,13 +374,27 @@ def main():
     shot_draw = ImageDraw.Draw(shot_image)
 
     ble_timeout_count = 0
+    last_bluetooth_connect_time_s = 0
+    clear = True
 
+    # profiler.enable()
     while True:
         now = time.time()
-        if scale_connected == False and BLE_MAC_ADDRESS != "":
-            connect_and_parse_data(BLE_MAC_ADDRESS)
-            scale_connected = True
+
+        draw_all = False
+        if clear:
+            draw_all = True
+            clear = False
+        draw_seconds = False
+        draw_current_weight = False
+        draw_target_weight = False
+        draw_bluetooth = False
+
+        if scale_connected == False and BLE_MAC_ADDRESS != "" and (now - last_bluetooth_connect_time_s) > BLUETOOTH_CONNECT_S:
+            _, scale_connected = connect_and_parse_data(BLE_MAC_ADDRESS)
             ble_timeout_count = 0
+            last_bluetooth_connect_time_s = now
+            draw_bluetooth = True
         if scale_connected:
             try:
                 gattinst.read_nonblocking(size=40000, timeout=0.1)
@@ -404,6 +431,8 @@ def main():
                 scale_units = "".join(chr(x) for x in data[9:11])
                 battery = ((data[15] - 129) / 29) * 100
 
+                if float(weight) != shot_current_weight_g:
+                    draw_current_weight = True
                 shot_current_weight_g = float(weight)
 
                 print(f"Weight: {weight} {scale_units} | Battery Level: {battery:.1f}%")
@@ -414,6 +443,7 @@ def main():
                     print("BLE scale disconnected.")
                     gattinst.close()
                     scale_connected = False
+                    draw_bluetooth = True
 
         # Prepare screen
         shot_draw.rectangle((0, 0, 240, 240), fill=COLORS["primary_dark"], outline=None, width=1)
@@ -421,6 +451,7 @@ def main():
 
         if shot_running:
             shot_time_s = now - shot_started_time
+            draw_seconds = True
             print(f"Running: {shot_current_weight_g}/{shot_target_weight_g}g | {shot_time_s}s | ")
             if (shot_current_weight_g + SHOT_AFTER_DRIPPING_WEIGHT_G) >= shot_target_weight_g:
                 manage_shot(False)
@@ -431,17 +462,23 @@ def main():
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 180, 270, 120):
                 update_shot_target_weight_g(shot_target_weight_g - 0.5)
                 display_image(shot_image, "./assets/left_pressed.png", (0, 0), (240, 240))
+                draw_all = True
+                clear = True
 
             # increase weight
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 270, 359, 120):
                 update_shot_target_weight_g(shot_target_weight_g + 0.5)
                 display_image(shot_image, "./assets/right_pressed.png", (0, 0), (240, 240))
+                draw_all = True
+                clear = True
 
             # start/stop shot
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 0, 180, 120):
                 print("Shot button pressed")
-                manage_shot(not shot_running)
                 display_image(shot_image, "./assets/bottom_pressed.png", (0, 0), (240, 240))
+                manage_shot(not shot_running)
+                draw_all = True
+                clear = True
 
             handled_touch_interrupt()
 
@@ -455,16 +492,33 @@ def main():
         shot_draw.text((80, 150), f"{shot_time_s:.1f}s", fill=COLORS["secondary"], font=fonts["xl"])
         draw_shot_weight_progress(shot_draw)
         draw_bluetooth_connection(shot_draw)
-        disp.ShowImage(shot_image)
-        time.sleep(0.02)
+
+        if draw_all:
+            disp.ShowImage(shot_image)
+        else:
+            if draw_seconds:
+                disp.ShowImage_Windows(30, 150, 200, 200, shot_image)
+            if draw_current_weight:
+                disp.ShowImage_Windows(30, 95, 60, 120, shot_image)
+            if draw_bluetooth:
+                disp.ShowImage_Windows(118, 20, 122, 24, shot_image)
+        # time.sleep(0.01)
 
 
 if __name__ == "__main__":
     try:
         main()
+        profiler.disable()
+        # Print stats
+        stats = pstats.Stats(profiler).sort_stats("cumtime")
+        stats.print_stats()
     except IOError as e:
         logging.info(e)
     except KeyboardInterrupt:
+        profiler.disable()
+        # Print stats
+        stats = pstats.Stats(profiler).sort_stats("cumtime")
+        stats.print_stats()
         disp.module_exit()
         logging.info("quit:")
         exit()

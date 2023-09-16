@@ -37,7 +37,7 @@ import numpy as np
 
 
 class RaspberryPi:
-    def __init__(self, spi=spidev.SpiDev(0, 0), spi_freq=12000000, rst=17, dc=27, bl=25, tp_int=5, tp_rst=6, bl_freq=1000):
+    def __init__(self, spi=spidev.SpiDev(0, 0), spi_freq=16000000, rst=17, dc=27, bl=25, tp_int=5, tp_rst=6, bl_freq=1500):
         import RPi.GPIO
 
         self.np = np
