@@ -47,7 +47,7 @@ SHOT_AFTER_DRIPPING_WEIGHT_G = 3
 BLE_MAC_ADDRESS = "64:33:DB:AD:C5:FD"
 
 # Setup Logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(format="%(asctime)s %(levelname)-8s %(message)s", level=logging.DEBUG, datefmt="%Y-%m-%d %H:%M:%S")
 pil_logger = logging.getLogger("PIL")
 pil_logger.setLevel(logging.INFO)
 
@@ -81,20 +81,20 @@ def send_ble_command(mac_address, handle, command):
     try:
         subprocess.run(["gatttool", "-b", f"{mac_address}", "--char-write-req", "-a", f"{handle}", "-n", f"{command}"], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Failed to send BLE command: {e}")
+        logging.error(f"Failed to send BLE command: {e}")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}")
 
 
 def restart_ble_interface():
     try:
         subprocess.run(["sudo", "hciconfig", "hci0", "down"], check=True)
         subprocess.run(["sudo", "hciconfig", "hci0", "up"], check=True)
-        print("BLE interface restarted successfully.")
+        logging.info("BLE interface restarted successfully.")
     except subprocess.CalledProcessError as e:
-        print(f"Failed to restart BLE interface: {e}")
+        logging.error(f"Failed to restart BLE interface: {e}")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}")
 
 
 def connect_and_parse_data(mac_address):
@@ -114,7 +114,7 @@ def connect_and_parse_data(mac_address):
 
 def initialize_yaml():
     """Initialize the YAML file with default values if it doesn't exist."""
-    print(os.path.join(path, "settings.yaml"))
+    logging.debug(os.path.join(path, "settings.yaml"))
     if not os.path.exists(os.path.join(path, "settings.yaml")):
         with open("./settings.yaml", "w") as file:
             yaml.dump({"shot_target_weight_g": 35}, file)
@@ -176,11 +176,11 @@ def manage_shot(on):
     """Manage the espresso shot."""
     global shot_current_weight_g, shot_running, shot_started_time, now, scale_connected, gattinst
 
-    print(f"Turn shot to {on} with current weight of {shot_current_weight_g}")
+    logging.info(f"Turn shot to {on} with current weight of {shot_current_weight_g}")
     # We need to tare first
     if on and shot_current_weight_g > 1.0:
         gattinst.sendline(f"char-write-cmd {FELICITA['command_handle']} {FELICITA['tare']}")
-        print(f"Taring scale...")
+        logging.info(f"Taring scale...")
         Timer(2, manage_shot, [True]).start()
         return
 
@@ -450,12 +450,12 @@ def main():
                     draw_current_weight = True
                 shot_current_weight_g = float(weight)
 
-                print(f"Weight: {weight} {scale_units} | Battery Level: {battery:.1f}%")
+                logging.debug(f"Weight: {weight} {scale_units} | Battery Level: {battery:.1f}%")
 
             except pexpect.TIMEOUT:
                 ble_timeout_count += 1
                 if ble_timeout_count > 10:
-                    print("BLE scale disconnected.")
+                    logging.info("BLE scale disconnected.")
                     gattinst.close()
                     scale_connected = False
                     draw_bluetooth = True
@@ -466,8 +466,7 @@ def main():
 
         if shot_running:
             shot_time_s = now - shot_started_time
-            draw_seconds = True
-            print(f"Running: {shot_current_weight_g}/{shot_target_weight_g}g | {shot_time_s}s | ")
+            logging.info(f"Running: {shot_current_weight_g}/{shot_target_weight_g}g | {shot_time_s}s | ")
             if (shot_current_weight_g + SHOT_AFTER_DRIPPING_WEIGHT_G) >= shot_target_weight_g:
                 manage_shot(False)
 
@@ -491,7 +490,7 @@ def main():
 
             # start/stop shot
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 0, 180, 120):
-                print("Shot button pressed")
+                logging.info("Shot button pressed")
                 display_image(shot_image, "./assets/bottom_pressed.png", (0, 0), (240, 240))
                 manage_shot(not shot_running)
                 draw_lower_half = True
