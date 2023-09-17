@@ -37,7 +37,7 @@ import numpy as np
 
 
 class RaspberryPi:
-    def __init__(self, spi=spidev.SpiDev(0, 0), spi_freq=16000000, rst=17, dc=27, bl=25, tp_int=5, tp_rst=6, bl_freq=1500):
+    def __init__(self, spi=spidev.SpiDev(0, 0), spi_freq=20000000, rst=17, dc=27, bl=25, tp_int=5, tp_rst=6, bl_freq=100):
         import RPi.GPIO
 
         self.np = np
@@ -91,19 +91,20 @@ class RaspberryPi:
     def i2c_read_byte(self, Addr):
         return self.I2C.read_byte_data(self.address, Addr)
 
-    def bl_DutyCycle(self, duty):
-        self._pwm.ChangeDutyCycle(duty)
-
-    def bl_Frequency(self, freq):
-        self._pwm.ChangeFrequency(freq)
+    def set_brightness(self, brightness: float):
+        string = f"{self.BL_PIN}={brightness}"
+        original_stdout = sys.stdout
+        with open("/dev/pi-blaster", "w") as f:
+            sys.stdout = f  # Change the standard output to the file we created.
+            print(string)
+        sys.stdout = original_stdout  # Reset the standard output to its original value
 
     def LCD_module_init(self):
         self.GPIO.setup(self.RST_PIN, self.GPIO.OUT)
         self.GPIO.setup(self.DC_PIN, self.GPIO.OUT)
         self.GPIO.setup(self.BL_PIN, self.GPIO.OUT)
 
-        self._pwm = self.GPIO.PWM(self.BL_PIN, self.BL_freq)
-        self._pwm.start(100)
+        self.set_brightness(0.1)
         if self.SPI != None:
             self.SPI.max_speed_hz = self.SPEED
             self.SPI.mode = 0b00
@@ -124,7 +125,6 @@ class RaspberryPi:
 
         self.GPIO.output(self.TP_RST, 1)
 
-        self._pwm.stop()
         time.sleep(0.001)
         self.GPIO.output(self.BL_PIN, 1)
         # self.GPIO.cleanup()

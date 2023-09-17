@@ -1,8 +1,6 @@
 #sudo apt-get install python3-pil
 #sudo apt-get install python3-numpy
-#sudo apt install bluez
-#sudo usermod -G bluetooth -a christian
-
+# https://github.com/sarfata/pi-blaster (install manually)
 Adafruit-Blinka==8.22.0
 adafruit-circuitpython-busdevice==5.2.6
 adafruit-circuitpython-requests==2.0.1
@@ -15,6 +13,4 @@ pillow>=8.0.0
 RPi.GPIO>=0.7.0
 pyyaml>=5.4.0
 spidev
-pybluez
-bluepy
 pexpect
