@@ -67,14 +67,37 @@ mode = 1
 disp = {}
 shot_button_debounce_ms = 300  # debounce time in milliseconds
 shot_button_last_interrupt_time = 0
+touch_debounce_ms = 900  # debounce time in milliseconds
+touch_last_interrupt_time = 0
 
 # Initialize Objects
 touch = Touch_1inch28.Touch_1inch28()
-
+display_brightness = None
 profiler = cProfile.Profile()
+
 
 # Path
 path = os.path.dirname(os.path.realpath(__file__))
+
+
+class ResettableTimer:
+    def __init__(self, timeout, callback):
+        self.timeout = timeout
+        self.callback = callback
+        self.timer = None
+
+    def start(self):
+        if self.timer:
+            self.timer.cancel()
+        self.timer = Timer(self.timeout, self.callback)
+        self.timer.start()
+
+    def reset(self):
+        self.start()
+
+    def stop(self):
+        if self.timer:
+            self.timer.cancel()
 
 
 def send_ble_command(mac_address, handle, command):
@@ -147,14 +170,18 @@ def shot_button_callback(pin):
     if current_time - shot_button_last_interrupt_time > shot_button_debounce_ms:
         # Your button pressed logic here
         shot_button_interrupt_flag = 1
+        shot_button_last_interrupt_time = current_time
 
 
 def touch_interrupt_callback(TP_INT_PIN):
     """Handle the interrupt callback."""
-    global touch_interrupt_flag
+    global touch_interrupt_flag, touch_last_interrupt_time
+    current_time = int(round(time.time() * 1000))  # get current time in milliseconds
     if mode == 1:
-        touch_interrupt_flag = 1
-        touch.get_point()
+        if current_time - touch_last_interrupt_time > touch_debounce_ms:
+            touch_interrupt_flag = 1
+            touch.get_point()
+            touch_last_interrupt_time = current_time
     else:
         touch.Gestures = touch.Touch_Read_Byte(0x01)
 
@@ -216,6 +243,20 @@ def reset_shot():
     """Reset the shot time."""
     global shot_time_s
     shot_time_s = 0.0
+
+
+def set_display_to_dark():
+    global display_brightness
+    disp.set_brightness(0.1)
+    if display_brightness:
+        display_brightness.stop()
+
+
+def set_display_to_bright():
+    global display_brightness
+    disp.set_brightness(0.6)
+    if display_brightness:
+        display_brightness.reset()
 
 
 def is_point_in_circular_segment(x, y, origin_x, origin_y, start_angle, end_angle, radius):
@@ -338,7 +379,7 @@ def setup_fonts():
 
 def main():
     """Main function to execute the script."""
-    global now, shot_time_s, shot_current_weight_g, shot_target_weight_g, shot_running, disp, scale_connected, gattinst
+    global now, shot_time_s, shot_current_weight_g, shot_target_weight_g, shot_running, disp, scale_connected, gattinst, display_brightness
 
     # Initialize YAML and set shot_target_weight_g
     initialize_yaml()
@@ -375,10 +416,8 @@ def main():
 
     ble_timeout_count = 0
     last_bluetooth_connect_time_s = 0
-    clear_all = True
-    clear_upper_right = False
-    clear_upper_left = False
-    clear_lower_half = False
+
+    display_brightness = ResettableTimer(60, set_display_to_dark)
 
     # profiler.enable()
     while True:
@@ -472,6 +511,7 @@ def main():
 
         # Evaluate touch
         if touch_interrupt_flag == 1:
+            set_display_to_bright()
             # decrease weight
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 180, 270, 120):
                 update_shot_target_weight_g(shot_target_weight_g - 0.5)
