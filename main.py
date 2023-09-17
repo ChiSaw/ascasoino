@@ -343,6 +343,7 @@ def draw_thick_arc(draw, bounding_box, start_angle, end_angle, thickness=10):
     draw.ellipse((start_x - thickness / 2, start_y - thickness / 2, start_x + thickness / 2, start_y + thickness / 2), fill=COLORS["primary_light"])
     draw.ellipse((end_x - thickness / 2, end_y - thickness / 2, end_x + thickness / 2, end_y + thickness / 2), fill=COLORS["primary_light"])
     draw.ellipse((end_x - thickness / 4, end_y - thickness / 4, end_x + thickness / 4, end_y + thickness / 4), fill="white")
+    return (int(end_x - thickness * 4 / 2), int(end_y - thickness * 4 / 2), int(end_x + thickness * 4 / 2), int(end_y + thickness * 4 / 2))
 
 
 def draw_shot_weight_progress(draw):
@@ -354,7 +355,7 @@ def draw_shot_weight_progress(draw):
 
     # Draw the circular progress bar
     bounding_box = (10, 10, 230, 230)  # Adjust as necessary
-    draw_thick_arc(draw, bounding_box, 0, angle, thickness=10)
+    return draw_thick_arc(draw, bounding_box, 0, angle, thickness=10)
 
 
 def initialize_display():
@@ -423,32 +424,10 @@ def main():
     while True:
         now = time.time()
 
-        draw_all = False
-        if clear_all:
-            draw_all = True
-            clear_all = False
-        draw_upper_left = False
-        draw_upper_right = False
-        draw_lower_half = False
-        if clear_upper_left:
-            draw_upper_left = True
-            clear_upper_left = False
-        if clear_upper_right:
-            draw_upper_right = True
-            clear_upper_right = False
-        if clear_lower_half:
-            draw_lower_half = True
-            clear_lower_half = False
-        draw_seconds = False
-        draw_current_weight = False
-        draw_target_weight = False
-        draw_bluetooth = False
-
         if scale_connected == False and BLE_MAC_ADDRESS != "" and (now - last_bluetooth_connect_time_s) > BLUETOOTH_CONNECT_S:
             _, scale_connected = connect_and_parse_data(BLE_MAC_ADDRESS)
             ble_timeout_count = 0
             last_bluetooth_connect_time_s = now
-            draw_bluetooth = True
         if scale_connected:
             try:
                 gattinst.read_nonblocking(size=40000, timeout=0.1)
@@ -484,9 +463,6 @@ def main():
                 weight = weight.lstrip("0")
                 scale_units = "".join(chr(x) for x in data[9:11])
                 battery = ((data[15] - 129) / 29) * 100
-
-                if float(weight) != shot_current_weight_g:
-                    draw_current_weight = True
                 shot_current_weight_g = float(weight)
 
                 logging.debug(f"Weight: {weight} {scale_units} | Battery Level: {battery:.1f}%")
@@ -497,7 +473,6 @@ def main():
                     logging.info("BLE scale disconnected.")
                     gattinst.close()
                     scale_connected = False
-                    draw_bluetooth = True
 
         # Prepare screen
         shot_draw.rectangle((0, 0, 240, 240), fill=COLORS["primary_dark"], outline=None, width=1)
@@ -516,25 +491,17 @@ def main():
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 180, 270, 120):
                 update_shot_target_weight_g(shot_target_weight_g - 0.5)
                 display_image(shot_image, "./assets/left_pressed.png", (0, 0), (240, 240))
-                draw_upper_left = True
-                draw_target_weight = True
-                clear_upper_left = True
 
             # increase weight
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 270, 359, 120):
                 update_shot_target_weight_g(shot_target_weight_g + 0.5)
                 display_image(shot_image, "./assets/right_pressed.png", (0, 0), (240, 240))
-                draw_upper_right = True
-                draw_target_weight = True
-                clear_upper_right = True
 
             # start/stop shot
             if is_point_in_circular_segment(touch.X_point, touch.Y_point, 120, 120, 0, 180, 120):
                 logging.info("Shot button pressed")
                 display_image(shot_image, "./assets/bottom_pressed.png", (0, 0), (240, 240))
                 manage_shot(not shot_running)
-                draw_lower_half = True
-                clear_lower_half = True
 
             handled_touch_interrupt()
 
@@ -549,23 +516,8 @@ def main():
         draw_shot_weight_progress(shot_draw)
         draw_bluetooth_connection(shot_draw)
 
-        if draw_all:
-            disp.ShowImage(shot_image)
-        else:
-            if draw_upper_left:
-                disp.ShowImage_Windows(1, 1, 120, 120, shot_image)
-            if draw_upper_right:
-                disp.ShowImage_Windows(120, 1, 239, 120, shot_image)
-            if draw_lower_half:
-                disp.ShowImage_Windows(1, 140, 238, 238, shot_image)
-            if draw_seconds:
-                disp.ShowImage_Windows(30, 150, 200, 200, shot_image)
-            if draw_current_weight:
-                disp.ShowImage_Windows(30, 95, 60, 120, shot_image)
-            if draw_target_weight:
-                disp.ShowImage_Windows(120, 1, 239, 150, shot_image)
-            if draw_bluetooth:
-                disp.ShowImage_Windows(118, 20, 122, 24, shot_image)
+        disp.ShowImage(shot_image)
+
         # time.sleep(0.01)
 
 
