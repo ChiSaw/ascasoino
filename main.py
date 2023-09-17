@@ -47,7 +47,7 @@ SHOT_AFTER_DRIPPING_WEIGHT_G = 3
 BLE_MAC_ADDRESS = "64:33:DB:AD:C5:FD"
 
 # Setup Logging
-logging.basicConfig(format="%(asctime)s %(levelname)-8s %(message)s", level=logging.DEBUG, datefmt="%Y-%m-%d %H:%M:%S")
+logging.basicConfig(format="%(asctime)s %(levelname)-8s %(message)s.%(msecs)03d", level=logging.DEBUG, datefmt="%Y-%m-%d %H:%M:%S:")
 pil_logger = logging.getLogger("PIL")
 pil_logger.setLevel(logging.INFO)
 
